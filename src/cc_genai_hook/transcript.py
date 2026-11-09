@@ -231,18 +231,25 @@ def latest_prompt(
 def normalize_block(
     block: Dict[str, Any], include_thinking: bool = False
 ) -> Optional[Dict[str, Any]]:
+    """Map an Anthropic transcript block to a GenAI semconv part.
+
+    See ``gen-ai-input-messages.json`` / ``gen-ai-output-messages.json``:
+    text/reasoning use ``content``, tool calls use ``name``/``arguments``,
+    tool responses use ``type=tool_call_response`` with ``id``/``response``.
+    """
+
     btype = block.get("type")
     if btype == "text":
-        return {"type": "text", "text": block.get("text", "")}
+        return {"type": "text", "content": block.get("text", "")}
     if btype == "thinking":
         if not include_thinking:
             return None
-        return {"type": "reasoning", "text": block.get("thinking", "")}
+        return {"type": "reasoning", "content": block.get("thinking", "")}
     if btype == "tool_use":
         return {
             "type": "tool_call",
             "id": block.get("id"),
-            "name": block.get("name"),
+            "name": block.get("name") or "",
             "arguments": block.get("input"),
         }
     if btype == "tool_result":
@@ -253,35 +260,78 @@ def normalize_block(
                 for part in content
                 if isinstance(part, dict)
             )
-        return {
-            "type": "tool_result",
-            "tool_call_id": block.get("tool_use_id"),
-            "is_error": bool(block.get("is_error")),
-            "content": content,
+        part: Dict[str, Any] = {
+            "type": "tool_call_response",
+            "id": block.get("tool_use_id"),
+            "response": content,
         }
+        if block.get("is_error"):
+            part["is_error"] = True
+        return part
     if btype == "image":
+        source = block.get("source") or {}
+        media_type = source.get("media_type")
+        url = source.get("url")
+        if url:
+            return {
+                "type": "uri",
+                "modality": "image",
+                "mime_type": media_type,
+                "uri": url,
+            }
         return {
-            "type": "image",
-            "media_type": (block.get("source") or {}).get("media_type"),
+            "type": "blob",
+            "modality": "image",
+            "mime_type": media_type,
+            "content": source.get("data"),
         }
-    return {"type": btype}
+    # GenericPart: prefix provider-specific types to avoid collisions.
+    return {"type": "anthropic.%s" % btype if btype else "anthropic.unknown"}
 
 
-def message_payload(
+def message_payloads(
     item: TimelineItem, include_thinking: bool = False
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
+    """Return GenAI semconv messages for one timeline item.
+
+    Anthropic puts tool results in a ``user`` message with ``tool_result``
+    blocks.  Semconv requires them to be ``role=tool`` messages with
+    ``tool_call_response`` parts, so a mixed user item may produce a user
+    message followed by one or more tool messages.
+    """
+
     parts = [
         part
         for part in (normalize_block(b, include_thinking) for b in item.blocks)
         if part is not None
     ]
+    if not parts:
+        return []
     if item.kind == "assistant":
-        return {
-            "role": "assistant",
-            "content": parts,
-            "finish_reason": item.stop_reason,
-        }
-    return {"role": "user", "content": parts}
+        return [
+            {
+                "role": "assistant",
+                "parts": parts,
+                "finish_reason": item.stop_reason,
+            }
+        ]
+
+    messages: List[Dict[str, Any]] = []
+    current_role: Optional[str] = None
+    current_parts: List[Dict[str, Any]] = []
+    for part in parts:
+        role = "tool" if part.get("type") == "tool_call_response" else "user"
+        if role != current_role:
+            if current_parts:
+                messages.append(
+                    {"role": current_role, "parts": current_parts}
+                )
+            current_role = role
+            current_parts = []
+        current_parts.append(part)
+    if current_parts:
+        messages.append({"role": current_role, "parts": current_parts})
+    return messages
 
 
 def input_messages(
@@ -304,7 +354,5 @@ def input_messages(
     for item in timeline[start:upto]:
         if item.is_meta:
             continue
-        payload = message_payload(item, include_thinking)
-        if payload["content"]:
-            out.append(payload)
+        out.extend(message_payloads(item, include_thinking))
     return out

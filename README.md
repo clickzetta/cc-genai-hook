@@ -343,6 +343,46 @@ cc-genai-hook seed --session-id <session-id> --transcript <transcript-path>
 - `claude_code.genai_hook.request_ref`
 - `claude_code.genai_hook.timing.source=transcript`
 
+### Messages 格式
+
+`gen_ai.input.messages` / `gen_ai.output.messages` 严格使用 GenAI semconv 的
+`role + parts` 结构，而不是 Anthropic 原始的 `role + content`：
+
+```json
+[
+  {
+    "role": "user",
+    "parts": [{"type": "text", "content": "read the file"}]
+  },
+  {
+    "role": "assistant",
+    "parts": [
+      {
+        "type": "tool_call",
+        "id": "call_1",
+        "name": "Read",
+        "arguments": {"file_path": "/tmp/x"}
+      }
+    ],
+    "finish_reason": "tool_use"
+  },
+  {
+    "role": "tool",
+    "parts": [
+      {
+        "type": "tool_call_response",
+        "id": "call_1",
+        "response": "file contents"
+      }
+    ]
+  }
+]
+```
+
+Claude Code transcript 里 `tool_result` 位于 user 消息中；归一化后会拆成独立的
+`role=tool` 消息，并使用 `tool_call_response` part。图片使用 `blob` 或 `uri`
+part；未知 block 使用 `anthropic.<type>` 的 GenericPart。
+
 ### `execute_tool`
 
 - `gen_ai.operation.name=execute_tool`

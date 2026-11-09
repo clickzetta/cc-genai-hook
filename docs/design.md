@@ -695,6 +695,27 @@ claude_code.session.id          = session_id
 | `claude_code.genai_hook.tool.is_interrupt` | `is_interrupt` |
 | `claude_code.genai_hook.content.truncated` | 截断标记 |
 
+#### Messages 格式
+
+`gen_ai.input.messages` / `gen_ai.output.messages` 严格使用 GenAI semconv：
+
+```json
+[
+  {"role": "user", "parts": [{"type": "text", "content": "..."}]},
+  {"role": "assistant", "parts": [
+    {"type": "tool_call", "id": "...", "name": "Read", "arguments": {...}}
+  ], "finish_reason": "tool_use"},
+  {"role": "tool", "parts": [
+    {"type": "tool_call_response", "id": "...", "response": "..."}
+  ]}
+]
+```
+
+- Anthropic transcript 的 `tool_result` 位于 user 消息中，归一化后拆成 `role=tool`。
+- `text` / `reasoning` 使用 `content` 字段。
+- 图片使用 `blob` 或 `uri` part。
+- 未知 block 使用 `anthropic.<type>` GenericPart。
+
 ### 7.6 内容格式与兼容性
 
 ```json

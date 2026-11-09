@@ -3,7 +3,7 @@ from cc_genai_hook.transcript import (
     input_messages,
     is_prompt,
     is_real_prompt_row,
-    message_payload,
+    message_payloads,
 )
 
 
@@ -106,16 +106,37 @@ def test_prompt_detection_excludes_tool_result_rows():
 def test_input_messages_last_turn_excludes_thinking_by_default():
     timeline, _ = build_timeline(_rows())
     msgs = input_messages(timeline, 3, "last_turn", include_thinking=False)
-    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "tool"]
     assert "secret" not in str(msgs)
     msgs_with_thinking = input_messages(timeline, 3, "last_turn", include_thinking=True)
     assert "secret" in str(msgs_with_thinking)
 
 
-def test_message_payload():
+def test_message_payloads_use_semconv_parts():
     timeline, _ = build_timeline(_rows())
     assistant = [item for item in timeline if item.kind == "assistant"][0]
-    payload = message_payload(assistant, include_thinking=False)
+    messages = message_payloads(assistant, include_thinking=False)
+    assert len(messages) == 1
+    payload = messages[0]
     assert payload["role"] == "assistant"
     assert payload["finish_reason"] == "tool_use"
-    assert payload["content"][0]["type"] == "tool_call"
+    assert payload["parts"][0]["type"] == "tool_call"
+    assert payload["parts"][0]["name"] == "Read"
+
+
+def test_tool_result_becomes_tool_message():
+    timeline, _ = build_timeline(_rows())
+    tool_item = timeline[2]
+    messages = message_payloads(tool_item, include_thinking=False)
+    assert messages == [
+        {
+            "role": "tool",
+            "parts": [
+                {
+                    "type": "tool_call_response",
+                    "id": "t1",
+                    "response": "file",
+                }
+            ],
+        }
+    ]

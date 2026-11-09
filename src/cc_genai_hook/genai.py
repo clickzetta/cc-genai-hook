@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .config import ConfigError
-from .transcript import TimelineItem, input_messages, message_payload
+from .transcript import TimelineItem, input_messages, message_payloads
 
 
 def ts_ns(value: Optional[str]) -> int:
@@ -62,21 +62,26 @@ class ContentProcessor:
         lines: List[str] = []
         for message in messages:
             role = message.get("role", "unknown")
-            parts = message.get("content") or []
+            parts = message.get("parts") or []
             chunks: List[str] = []
             for part in parts:
                 ptype = part.get("type")
-                if ptype in ("text", "reasoning"):
-                    chunks.append(str(part.get("text", "")))
+                if ptype in ("text", "reasoning", "transcription"):
+                    chunks.append(str(part.get("content", "")))
                 elif ptype == "tool_call":
                     chunks.append(
                         "tool_call %s(%s)"
                         % (part.get("name"), as_text(part.get("arguments")))
                     )
-                elif ptype == "tool_result":
+                elif ptype == "tool_call_response":
                     chunks.append(
-                        "tool_result %s: %s"
-                        % (part.get("tool_call_id"), as_text(part.get("content")))
+                        "tool_call_response %s: %s"
+                        % (part.get("id"), as_text(part.get("response")))
+                    )
+                elif ptype in ("blob", "uri", "file"):
+                    chunks.append(
+                        "%s %s"
+                        % (ptype, part.get("uri") or part.get("mime_type") or "")
                     )
             lines.append("%s: %s" % (role, " ".join(chunks)))
         return "\n".join(lines)
@@ -158,7 +163,7 @@ def chat_attributes(
             input_msgs = input_messages(
                 timeline, index, "last_turn", content.include_thinking
             )
-        output_msgs = [message_payload(item, content.include_thinking)]
+        output_msgs = message_payloads(item, content.include_thinking)
         input_text, input_cut = content.clean(
             content.format_messages(input_msgs, compat.get("messages_format", "json")),
             content.max_input,
@@ -296,9 +301,15 @@ def root_attributes(
         attrs["claude_code.genai_hook.step_count"] = int(step_count)
 
     if content.mode != "none":
-        input_msgs = [message_payload(prompt_item, content.include_thinking)] if prompt_item else []
+        input_msgs = (
+            message_payloads(prompt_item, content.include_thinking)
+            if prompt_item
+            else []
+        )
         output_msgs = (
-            [message_payload(messages[-1], content.include_thinking)] if messages else []
+            message_payloads(messages[-1], content.include_thinking)
+            if messages
+            else []
         )
         input_text, input_cut = content.clean(
             content.format_messages(input_msgs, compat.get("messages_format", "json")),
