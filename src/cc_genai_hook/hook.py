@@ -335,6 +335,24 @@ def handle_stop(
         state.close()
 
 
+def prune_state(config: Dict[str, Any]) -> None:
+    """Apply the state TTL (throttled); never raises."""
+
+    try:
+        ttl_days = config.get("state", {}).get("ttl_days", 0)
+        if not ttl_days or ttl_days <= 0:
+            return
+        state = StateStore(config["state"]["dir"])
+        try:
+            removed = state.maybe_prune(ttl_days)
+        finally:
+            state.close()
+        if removed is not None:
+            _log(config, "ttl prune: removed %d session(s)" % removed)
+    except Exception:
+        _log(config, "ttl prune failed: %s" % traceback.format_exc(), error=True)
+
+
 def run(event: str) -> int:
     raw = ""
     try:
@@ -385,6 +403,7 @@ def run(event: str) -> int:
                 ),
                 error=bool(result.error),
             )
+            prune_state(config)
             return 0
         _log(config, "unknown event %r" % event, error=True)
         return 0

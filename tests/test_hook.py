@@ -111,3 +111,29 @@ def test_failed_emit_aborts_reserved_segment(tmp_path, monkeypatch):
         assert store.counts() == (1, 0, 0)
     finally:
         store.close()
+
+
+def test_prune_state_removes_expired_sessions(tmp_path):
+    from cc_genai_hook.hook import prune_state
+
+    config_path = tmp_path / "genai-hook.json"
+    config_path.write_text(json.dumps({"state": {"dir": str(tmp_path / "state")}}))
+    cfg = load_config(str(config_path))
+    store = StateStore(cfg["state"]["dir"])
+    try:
+        store.ensure_session("old")
+        store.ensure_session("new")
+        with store._conn:
+            store._conn.execute(
+                "UPDATE sessions SET updated_at='2000-01-01T00:00:00+00:00' WHERE session_id='old'"
+            )
+    finally:
+        store.close()
+
+    prune_state(cfg)
+
+    store = StateStore(cfg["state"]["dir"])
+    try:
+        assert store.counts()[0] == 1
+    finally:
+        store.close()

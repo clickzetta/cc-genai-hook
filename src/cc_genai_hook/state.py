@@ -58,11 +58,26 @@ CREATE TABLE IF NOT EXISTS tools (
   emitted_at      TEXT,
   PRIMARY KEY (session_id, tool_use_id)
 );
+
+CREATE TABLE IF NOT EXISTS meta (
+  key             TEXT PRIMARY KEY,
+  value           TEXT
+);
 """
+
+# Run TTL cleanup at most once per this many seconds.
+PRUNE_INTERVAL_S = 24 * 3600
+
+# Tables whose rows belong to a session and are removed with it.
+_SESSION_TABLES = ("segments", "messages", "tools")
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return _utcnow().isoformat()
 
 
 class StateStore:
@@ -285,6 +300,72 @@ class StateStore:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM tools").fetchone()
         return int(row[0]) if row else 0
+
+    def prune_expired(
+        self, ttl_days: float, now: Optional[datetime.datetime] = None
+    ) -> int:
+        """Delete sessions idle for longer than ``ttl_days`` and their rows.
+
+        A session counts as idle from its ``updated_at``, which every hook
+        refreshes, so an active session is never pruned.  ``ttl_days <= 0``
+        disables cleanup.  Returns the number of sessions removed.
+        """
+
+        if ttl_days <= 0:
+            return 0
+        now = now or _utcnow()
+        cutoff = (now - datetime.timedelta(days=ttl_days)).isoformat()
+        expired = "SELECT session_id FROM sessions WHERE updated_at < ?"
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for table in _SESSION_TABLES:
+                    self._conn.execute(
+                        "DELETE FROM %s WHERE session_id IN (%s)" % (table, expired),
+                        (cutoff,),
+                    )
+                cur = self._conn.execute(
+                    "DELETE FROM sessions WHERE updated_at < ?", (cutoff,)
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO meta(key, value) VALUES('last_prune_at', ?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                    """,
+                    (now.isoformat(),),
+                )
+                self._conn.commit()
+                return int(cur.rowcount)
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def maybe_prune(
+        self,
+        ttl_days: float,
+        interval_s: float = PRUNE_INTERVAL_S,
+        now: Optional[datetime.datetime] = None,
+    ) -> Optional[int]:
+        """Run :meth:`prune_expired` unless it already ran within ``interval_s``.
+
+        Returns the number of sessions removed, or ``None`` when skipped.
+        """
+
+        if ttl_days <= 0:
+            return None
+        now = now or _utcnow()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key='last_prune_at'"
+            ).fetchone()
+        if row and row[0]:
+            try:
+                last = datetime.datetime.fromisoformat(str(row[0]))
+                if 0 <= (now - last).total_seconds() < interval_s:
+                    return None
+            except ValueError:
+                pass
+        return self.prune_expired(ttl_days, now)
 
     def health(self) -> bool:
         try:

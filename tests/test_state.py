@@ -41,3 +41,69 @@ def test_seed_marks_all_messages(tmp_path):
         assert store.emitted_message_ids("s1") == {"m1", "m2"}
     finally:
         store.close()
+
+
+def _session_with_rows(store, session_id):
+    store.ensure_session(session_id, "/tmp/%s.jsonl" % session_id)
+    store.begin_segment(session_id, "p1", trace_id(session_id, "p1"), 1)
+    store.mark_messages(session_id, [("m1", "p1", span_id("chat", "m1"))])
+    store.mark_tool(session_id, "t1", "p1", span_id("execute_tool", "t1"))
+
+
+def test_prune_expired_removes_idle_sessions_and_rows(tmp_path):
+    import datetime
+
+    store = StateStore(str(tmp_path / "state"))
+    try:
+        _session_with_rows(store, "old")
+        _session_with_rows(store, "new")
+        old_stamp = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=20)
+        ).isoformat()
+        with store._conn:
+            store._conn.execute(
+                "UPDATE sessions SET updated_at=? WHERE session_id='old'", (old_stamp,)
+            )
+
+        assert store.prune_expired(14) == 1
+        assert store.counts() == (1, 1, 1)
+        assert store.tool_count() == 1
+        assert store.emitted_message_ids("old") == set()
+        assert store.emitted_message_ids("new") == {"m1"}
+        assert store.tool_emitted("new", "t1") is True
+    finally:
+        store.close()
+
+
+def test_prune_disabled_with_zero_ttl(tmp_path):
+    import datetime
+
+    store = StateStore(str(tmp_path / "state"))
+    try:
+        _session_with_rows(store, "s1")
+        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
+        assert store.prune_expired(0, now=future) == 0
+        assert store.maybe_prune(0, now=future) is None
+        assert store.counts() == (1, 1, 1)
+    finally:
+        store.close()
+
+
+def test_maybe_prune_is_throttled(tmp_path):
+    import datetime
+
+    store = StateStore(str(tmp_path / "state"))
+    try:
+        _session_with_rows(store, "s1")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        assert store.maybe_prune(14, now=now) == 0
+        # Within the interval: skipped even though the session has expired.
+        later = now + datetime.timedelta(days=15)
+        assert store.maybe_prune(14, interval_s=30 * 86400, now=later) is None
+        assert store.counts()[0] == 1
+        # Past the interval: runs and removes it.
+        assert store.maybe_prune(14, now=later) == 1
+        assert store.counts() == (0, 0, 0)
+        assert store.tool_count() == 0
+    finally:
+        store.close()

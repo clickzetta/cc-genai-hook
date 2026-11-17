@@ -280,6 +280,10 @@ def load_config(path: Optional[str] = None, require_endpoint: bool = False) -> D
     cfg["state"]["dir"] = os.path.expanduser(
         str(cfg.get("state", {}).get("dir") or DEFAULTS["state"]["dir"])
     )
+    ttl_days = cfg["state"].get("ttl_days", DEFAULTS["state"]["ttl_days"])
+    if isinstance(ttl_days, bool) or not isinstance(ttl_days, (int, float)) or ttl_days < 0:
+        raise ConfigError("state.ttl_days must be a number >= 0 (0 disables cleanup)")
+    cfg["state"]["ttl_days"] = ttl_days
     return cfg
 
 

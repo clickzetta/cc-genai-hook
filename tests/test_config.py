@@ -65,3 +65,19 @@ def test_load_config_merges_file_and_defaults(tmp_path, monkeypatch):
     assert cfg["exporter"]["resolved_endpoint"] == "https://otel.example.com/v1/traces"
     assert cfg["content"]["mode"] == "none"
     assert cfg["state"]["dir"].endswith("state")
+
+
+@pytest.mark.parametrize("value", [-1, "14", True, None])
+def test_invalid_ttl_days_rejected(tmp_path, value):
+    path = tmp_path / "genai-hook.json"
+    path.write_text(json.dumps({"state": {"dir": str(tmp_path), "ttl_days": value}}))
+    with pytest.raises(ConfigError):
+        load_config(str(path))
+
+
+def test_ttl_days_default_and_zero(tmp_path):
+    path = tmp_path / "genai-hook.json"
+    path.write_text(json.dumps({"state": {"dir": str(tmp_path)}}))
+    assert load_config(str(path))["state"]["ttl_days"] == 14
+    path.write_text(json.dumps({"state": {"dir": str(tmp_path), "ttl_days": 0}}))
+    assert load_config(str(path))["state"]["ttl_days"] == 0
