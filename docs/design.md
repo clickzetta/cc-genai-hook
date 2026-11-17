@@ -1134,7 +1134,7 @@ invoke_agent (parent turn / segment)
 | M2 ✅ | **Command 丰富内容模式**：PostToolUse/Failure command hooks、execute_tool spans、工具入参/返回/错误/耗时；不引入 sidecar |
 | M3 ✅ | **子代理 trace（无 sidecar）**：父 Stop 解析 subagent transcript、delegation tool span 下创建 subagent 容器、本地 step 顺序、同一 trace、递归深度限制 |
 | M4 ⏳ | **Sidecar 实时模式**：hookd + HTTP hooks、open segment span、实时 PostToolUse |
-| M5 ⏳ | outbox 重试、脱敏、采样、doctor、测试 |
+| M5 🚧 | outbox 重试、脱敏、采样、doctor、测试；state TTL 清理（已完成） |
 | M6 ⏳ | 灰度上线、后端看板、文档 |
 
 交付顺序：M1 先交付可独立运行的 command 模式；M2 在 command 模式下补齐 `execute_tool` 和工具内容；M3 由父 Stop 统一构建子代理子树，仍然不引入 sidecar；M4 再引入 sidecar 提供跨事件 open span 和实时工具 span。两种模式共用 core、配置和属性映射。
@@ -1147,14 +1147,14 @@ invoke_agent (parent turn / segment)
 4. **默认**：加 kill switch `CC_GENAI_HOOK_ENABLED=0`。
 5. **监控**：events received、spans emitted、export failures、queue depth、duplicate drops。
 
-### 15.3 M1/M2/M3 实现状态（2026-11-08）
+### 15.3 实现状态（2026-11-17）
 
 代码位于 `cc-genai-hook/`。
 
 M1 已完成：
 
 - ✅ `command` 模式：`Stop` + `SessionEnd` hooks
-- ✅ transcript 解析、`promptId` turn 分组、assistant 行合并
+- ✅ transcript 解析、`promptId` turn 分组、assistant 行合并、tool_result 索引
 - ✅ `invoke_agent` segment root + `chat` spans
 - ✅ 确定性 trace/span ID
 - ✅ SQLite 幂等状态
@@ -1172,7 +1172,6 @@ M2 已完成：
 - ✅ 确定性 tool span ID + `tool_use_id` 幂等
 - ✅ `error.type` / `is_interrupt` / `tool.success`
 - ✅ tool span 挂到当前 turn 的 root
-- ✅ 34 个单元/集成测试通过
 
 M3 已完成（无 sidecar）：
 
@@ -1184,11 +1183,21 @@ M3 已完成（无 sidecar）：
 - ✅ 父 tool span 的 end 扩展到 subagent end，保证区间包含
 - ✅ 递归子代理，深度上限 5
 - ✅ 所有 span 复用父 turn 的 trace_id
+- ✅ 子代理子树只在 ordered 模式构建；realtime 模式只发 delegation tool span
 
-M4/M5 暂不包含：
+M4 未开始：
 
-- ⏳ sidecar/HTTP hooks、实时 open span、实时 PostToolUse（M4）
-- ⏳ durable outbox、采样、完整脱敏、TTL 清理（M5）
+- ⏳ sidecar/HTTP hooks、实时 open span、实时 PostToolUse
+- ⏳ `install --mode sidecar` 目前直接报错退出；`--mode auto` 等同于 `command`
+
+M5 进行中：
+
+- ✅ state TTL 清理：按 `sessions.updated_at` 删除闲置超过 `ttl_days` 的会话及其 segments/messages/tools，Stop/SessionEnd 后执行，`meta.last_prune_at` 节流为每 24 小时一次
+- ⏳ durable outbox（outbox TTL 随 outbox 一起实现）、采样、完整脱敏
+
+M6 未开始：灰度上线、后端看板、文档。
+
+测试：44 个单元/集成测试通过。
 
 ### 15.4 从现有脚本迁移
 

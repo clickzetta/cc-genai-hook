@@ -10,46 +10,19 @@ OpenTelemetry GenAI spans to any OTLP HTTP/protobuf backend.
 - Deterministic trace/span IDs: repeated hook runs produce the same IDs.
 - Content is redacted/truncated and can be disabled.
 
-## Implemented scope
+## How it works
 
-Implemented in M1:
-
-- `command` mode: `Stop` and `SessionEnd` command hooks.
-- Transcript parsing with `promptId` turn grouping and assistant-row merging.
-- `invoke_agent` segment root + `chat` spans.
-- Deterministic IDs and SQLite idempotency.
-- Generic OTLP endpoint/header configuration.
-- `install`, `uninstall`, `doctor`, `config`, `seed`, and `hook` CLI commands.
-- Dry-run exporter for local verification.
-
-Implemented in M2 (command mode, no sidecar):
-
-- **ordered mode (default):** Stop emits chat + execute_tool in transcript order.
-  - One shared step counter per turn: `#1`, `#2`, `#3`...
-  - Each activity starts at the previous activity end + 1 ms.
-  - `claude_code.genai_hook.step_index` / `step_name` / `plan_step`.
-- **realtime mode (optional):** `PostToolUse` / `PostToolUseFailure` command hooks.
-- `execute_tool` spans with tool name, call ID, arguments, result, error and duration.
-- Deterministic tool span IDs and `tool_use_id` idempotency.
-- `error.type`, `is_interrupt`, and tool failure status.
-- Chat and tool spans are siblings under the turn root.
-
-Implemented in M3:
-
-- Parent `Stop` parses subagent transcripts; `SubagentStop` is ignored.
-- Detect Agent/Task delegation via `toolUseResult.agentId`.
-- Create a `subagent` container under the delegation tool span.
-- Subagent steps use a local step counter from `#1`.
-- Extend the parent tool span end to contain the subagent interval.
-- Recursive subagents up to depth 5, all in the same trace.
-- Subagent subtrees are built in **ordered** mode only; realtime mode emits the
-  delegation tool span without expanding the subagent transcript.
-
-Not implemented yet (planned for M4/M5):
-
-- **M4 — sidecar real-time mode:**
-  - Sidecar/HTTP hooks, open segment spans, real-time `PostToolUse`.
-- **M5:** durable SQLite outbox, sampling, full redaction, TTL cleanup.
+- **ordered mode (default):** the `Stop` hook emits `chat` and `execute_tool`
+  spans in transcript order under an `invoke_agent` turn root, with one shared
+  step counter per turn (`#1`, `#2`, ...) and +1 ms synthetic timestamps.
+- **realtime mode (optional):** `PostToolUse` / `PostToolUseFailure` command
+  hooks emit tool spans as tools finish.
+- **Subagents:** the parent `Stop` parses subagent transcripts and nests a
+  `subagent` container under the delegation tool span, in the same trace, up to
+  depth 5. `SubagentStop` is ignored. Subagent subtrees are built in ordered
+  mode only.
+- Idempotency: SQLite state keyed by `(session_id, message_id)` and
+  `(session_id, tool_use_id)`, plus deterministic span IDs.
 
 ## Install
 
@@ -131,6 +104,7 @@ Important fields:
 | `content.redact_patterns` | Regex replacements |
 | `hook.dry_run` | Write spans to `dry-run.jsonl` instead of sending |
 | `state.dir` | SQLite state directory |
+| `state.ttl_days` | Delete sessions idle longer than this many days, with their segment/message/tool rows (default `14`, `0` disables). Runs after Stop/SessionEnd, at most once per 24h. A pruned session that is resumed later re-sends its history once; span IDs are unchanged, so backends can dedupe. |
 
 Environment overrides:
 
@@ -161,6 +135,8 @@ cc-genai-hook hook stop|session_end|subagent_stop|post_tool_use|post_tool_use_fa
 ```bash
 PYTHONPATH=src python3 -m pytest -q
 ```
+
+Design, milestones and implementation status: [`docs/design.md`](docs/design.md).
 
 ## Security
 

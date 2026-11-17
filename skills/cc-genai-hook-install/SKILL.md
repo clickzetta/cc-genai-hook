@@ -1,40 +1,43 @@
 ---
 name: cc-genai-hook-install
 description: |
-  安装、配置和诊断 cc-genai-hook：通过 Claude Code command hooks 读取 transcript，
-  生成 gen_ai 语义的 invoke_agent / chat / execute_tool / subagent spans，并导出到
-  任意 OTLP HTTP/protobuf 后端。
-  触发词：cc-genai-hook、claude code trace、claude code 可观测、agent observability、
-  otel、gen_ai、tool span、subagent trace、trace 导出。
+  Install, configure and troubleshoot cc-genai-hook, which reads Claude Code
+  transcripts through command hooks, builds gen_ai invoke_agent / chat /
+  execute_tool / subagent spans, and exports them to any OTLP HTTP/protobuf backend.
+  Triggers: cc-genai-hook, claude code trace, claude code observability,
+  claude code 可观测, agent observability, otel, gen_ai, tool span, subagent trace,
+  trace export.
 ---
 
-# cc-genai-hook 安装与诊断
+# Install and troubleshoot cc-genai-hook
 
-> **给执行本 Skill 的 AI agent：**
-> 你正在安装和诊断 **cc-genai-hook**。它只处理 **Claude Code**，通过 command hooks
-> 读取 transcript，自己生成 OTel spans，再发送到用户指定的 OTLP HTTP/protobuf 后端。
+> **For the AI agent running this skill:**
+> You are installing and troubleshooting **cc-genai-hook**. It handles **Claude Code**
+> only: command hooks read the transcript, the hook builds its own OTel spans, and it
+> sends them to the OTLP HTTP/protobuf backend the user specifies.
 >
-> 按步骤执行。遇到 **ASK THE USER** 必须停下来询问，不要猜测 endpoint 或 header。
-> **不要回显 API key 或其他 secret。** 安装器会把 header 写入 `0600` 配置文件。
+> Follow the steps in order. At every **ASK THE USER**, stop and ask. Never guess an
+> endpoint or header. **Never echo API keys or other secrets.** The installer writes
+> headers to a `0600` config file.
 
 ---
 
-## Step 0 — 适用范围
+## Step 0 — Scope
 
-cc-genai-hook 支持：
+cc-genai-hook supports:
 
-- Claude Code CLI / IDE / Desktop 会话
-- 任意 OTLP HTTP/protobuf 后端
-- 任意 header（例如 `x-api-key`、`Authorization`、`x-tenant-id`）
+- Claude Code CLI / IDE / Desktop sessions
+- Any OTLP HTTP/protobuf backend
+- Any headers (for example `x-api-key`, `Authorization`, `x-tenant-id`)
 
-不支持：
+It does not support:
 
 - Hermes / OpenClaw / Opencode
-- gRPC OTLP（需要先转换为 HTTP/protobuf）
+- gRPC OTLP (convert to HTTP/protobuf first)
 
 ---
 
-## Step 1 — 检查环境
+## Step 1 — Check the environment
 
 ```bash
 test -d "$HOME/.claude" && echo "CLAUDE_CODE=yes"
@@ -42,35 +45,35 @@ claude --version 2>/dev/null || true
 python3 --version
 ```
 
-要求：
+Requirements:
 
-- Claude Code 已安装，支持 command hooks；建议 `2.1.300+`
-- Python `3.9+`（推荐 `3.11/3.12`）
-- 当前用户可写 `~/.claude/settings.json`
+- Claude Code is installed and supports command hooks; `2.1.300+` recommended
+- Python `3.9+` (`3.11/3.12` recommended)
+- The current user can write `~/.claude/settings.json`
 
-如果 `~/.claude` 不存在，**ASK THE USER** 确认 Claude Code 是否已安装。
+If `~/.claude` does not exist, **ASK THE USER** to confirm that Claude Code is installed.
 
 ---
 
-## Step 2 — 获取 OTLP endpoint 和 headers
+## Step 2 — Get the OTLP endpoint and headers
 
-需要用户提供：
+You need from the user:
 
 1. **Endpoint**
-   - 目标后端的 OTLP HTTP endpoint
-   - 通常是 base URL，例如 `https://otel.example.com`
-   - cc-genai-hook 会拼接 `/v1/traces`
-   - 如果用户给的是完整 `/v1/traces` URL，安装时加 `--endpoint-kind full`
+   - The OTLP HTTP endpoint of the target backend
+   - Usually a base URL, for example `https://otel.example.com`
+   - cc-genai-hook appends `/v1/traces`
+   - If the user gives a full `/v1/traces` URL, install with `--endpoint-kind full`
 
 2. **Headers**
-   - 后端要求的认证 header
-   - 例如：
+   - The authentication headers the backend requires
+   - For example:
      - `x-api-key: <key>`
      - `Authorization: Bearer <token>`
      - `x-tenant-id: <tenant>`
-   - 可以有多个 header
+   - There can be more than one
 
-### 2a. 检查已有配置
+### 2a. Check for an existing config
 
 ```bash
 test -f "$HOME/.claude/genai-hook.json" && \
@@ -84,29 +87,30 @@ print('headers:', list((e.get('headers') or {}).keys()))
 "
 ```
 
-如果已有配置，**ASK THE USER**：
+If a config exists, **ASK THE USER**:
 
-> 我找到了已有的 cc-genai-hook 配置。要复用它，还是更新为新的 endpoint / header？
+> I found an existing cc-genai-hook config. Do you want to reuse it, or update it
+> with a new endpoint / headers?
 
-不要打印 header 的值。
+Do not print header values.
 
-### 2b. 如果没有配置
+### 2b. If there is no config
 
-**ASK THE USER**：
+**ASK THE USER**:
 
-> 我需要目标 OTLP 后端的 **Endpoint** 和需要的 **header**（名称和值）。
-> 例如 `x-api-key=...` 或 `Authorization=Bearer ...`。
-> 请把 endpoint 和 header 发给我；我不会回显 secret。
+> I need the **endpoint** of your OTLP backend and the **headers** it requires
+> (names and values), for example `x-api-key=...` or `Authorization=Bearer ...`.
+> Please send them; I will not echo any secrets.
 
-等待用户提供，不要编造。
+Wait for the answer. Do not make values up.
 
-### 2c. 校验
+### 2c. Validate
 
-- Endpoint 必须是 `http://` 或 `https://`
-- 如果 endpoint 以 `/v1/traces` 结尾，使用 `--endpoint-kind full`
-- Header 非空
+- The endpoint must start with `http://` or `https://`
+- If the endpoint ends with `/v1/traces`, use `--endpoint-kind full`
+- Headers must not be empty
 
-保存为 shell 变量：
+Store them in shell variables:
 
 ```bash
 ENDPOINT="<user endpoint>"
@@ -115,21 +119,22 @@ API_KEY="<user key>"
 
 ---
 
-## Step 3 — 安装 cc-genai-hook
+## Step 3 — Install cc-genai-hook
 
-### 3a. 检查 CLI
+### 3a. Check the CLI
 
 ```bash
 command -v cc-genai-hook && cc-genai-hook --version
 ```
 
-如果已有可用版本：
+If a working version exists:
 
 ```bash
 CCG="$(command -v cc-genai-hook)"
 ```
 
-如果没有，安装到稳定目录。**不要**把 venv 放到临时目录，因为 hook 命令会引用它。
+Otherwise install it to a stable directory. **Do not** put the venv in a temporary
+directory, because the hook commands reference it.
 
 ```bash
 CCGH_HOME="$HOME/.local/share/cc-genai-hook"
@@ -148,9 +153,10 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
 "$CCG" --version
 ```
 
-### 3b. 安装 hooks
+### 3b. Install the hooks
 
-默认使用 **ordered 模式**：Stop 时统一生成 chat / execute_tool / subagent，保证顺序。
+The default is **ordered mode**: Stop emits chat / execute_tool / subagent spans
+together, in strict order.
 
 ```bash
 "$CCG" install \
@@ -160,7 +166,7 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
   --user "$(whoami)"
 ```
 
-如果 endpoint 已经是完整 `/v1/traces`：
+If the endpoint is already a full `/v1/traces` URL:
 
 ```bash
 "$CCG" install \
@@ -171,7 +177,7 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
   --user "$(whoami)"
 ```
 
-多个 header：
+Multiple headers:
 
 ```bash
 "$CCG" install \
@@ -182,9 +188,9 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
   --user "$(whoami)"
 ```
 
-### 3c. 可选：realtime 模式
+### 3c. Optional: realtime mode
 
-如果希望工具 span 在工具结束后立即发送：
+If tool spans should be sent as soon as each tool finishes:
 
 ```bash
 "$CCG" install \
@@ -195,21 +201,21 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
   --user "$(whoami)"
 ```
 
-- `ordered`（默认）：Stop 时统一发送，顺序严格
-- `realtime`：额外注册 PostToolUse / PostToolUseFailure，工具 span 实时发送
-- realtime 模式不展开 subagent 子树
+- `ordered` (default): everything is sent at Stop, in strict order
+- `realtime`: also registers PostToolUse / PostToolUseFailure, so tool spans are sent immediately
+- realtime mode does not expand subagent subtrees
 
-### 3d. 安装器做了什么
+### 3d. What the installer does
 
-- 写入 `~/.claude/genai-hook.json`（`0600`）
-- 备份并合并 `~/.claude/settings.json`
-- 默认添加 hooks：
+- Writes `~/.claude/genai-hook.json` (`0600`)
+- Backs up and merges `~/.claude/settings.json`
+- Adds these hooks by default:
   - `Stop`
   - `SessionEnd`
-- realtime 模式再加：
+- Realtime mode also adds:
   - `PostToolUse`
   - `PostToolUseFailure`
-- **不会**写入 Claude Code 原生 telemetry 变量：
+- Does **not** write any Claude Code native telemetry variables:
   - `CLAUDE_CODE_ENABLE_TELEMETRY`
   - `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`
   - `OTEL_TRACES_EXPORTER`
@@ -217,7 +223,7 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
 
 ---
 
-## Step 4 — 验证配置
+## Step 4 — Verify the setup
 
 ```bash
 "$CCG" doctor
@@ -225,47 +231,47 @@ CCG="$CCGH_HOME/venv/bin/cc-genai-hook"
 "$CCG" config show
 ```
 
-预期：
+Expected:
 
-- `endpoint` 是 `$ENDPOINT/v1/traces`
-- `protocol` 是 `http/protobuf`
-- `headers` 只显示名字
-- `hooks` 至少包含 `Stop` 和 `SessionEnd`
-- `doctor --send-test` 输出 `test span sent`
+- `endpoint` is `$ENDPOINT/v1/traces`
+- `protocol` is `http/protobuf`
+- `headers` shows names only
+- `hooks` includes at least `Stop` and `SessionEnd`
+- `doctor --send-test` prints `test span sent`
 
-如果失败：
+If it fails, check:
 
-1. 检查 endpoint 是否可达
-2. 检查 header 名和值
-3. 检查是否误带 `/v1/traces`
-4. 检查是否需要 `--endpoint-kind full`
-5. 检查代理 / 防火墙 / DNS
+1. Whether the endpoint is reachable
+2. The header names and values
+3. Whether `/v1/traces` was included by mistake
+4. Whether `--endpoint-kind full` is needed
+5. Proxy / firewall / DNS
 
-本地 dry-run：
+Local dry-run:
 
 ```bash
 CC_GENAI_HOOK_DRY_RUN=1 claude -p "hello"
 cat "$HOME/.claude/state/genai-hook/dry-run.jsonl"
 ```
 
-dry-run 只写本地文件，不发送。
+Dry-run only writes a local file and sends nothing.
 
 ---
 
-## Step 5 — Trace 结构
+## Step 5 — Trace structure
 
 ```text
-invoke_agent（turn root）
+invoke_agent (turn root)
 ├── chat
 ├── execute_tool
-└── execute_tool（Agent/Task delegation）
-    └── subagent（container）
+└── execute_tool (Agent/Task delegation)
+    └── subagent (container)
         ├── chat
         ├── execute_tool
         └── subagent response
 ```
 
-关键属性：
+Key attributes:
 
 - `gen_ai.operation.name`
 - `gen_ai.request.model` / `gen_ai.response.model`
@@ -274,43 +280,43 @@ invoke_agent（turn root）
 - `gen_ai.tool.name` / `gen_ai.tool.call.id`
 - `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`
 - `gen_ai.input.messages` / `gen_ai.output.messages`
-- `gen_ai.agent.id` / `gen_ai.agent.name`（subagent）
+- `gen_ai.agent.id` / `gen_ai.agent.name` (subagent)
 - `claude_code.genai_hook.step_index` / `step_name` / `plan_step` / `step_count`
 
 ---
 
-## Step 6 — 常见问题
+## Step 6 — Troubleshooting
 
 ### Q1. `cc-genai-hook: command not found`
 
-使用绝对路径：
+Use the absolute path:
 
 ```bash
 "$HOME/.local/share/cc-genai-hook/venv/bin/cc-genai-hook" doctor
 ```
 
-### Q2. Endpoint 404
+### Q2. Endpoint returns 404
 
-- base endpoint 不要带 `/v1/traces`
-- 完整路径使用 `--endpoint-kind full`
-- 不要根据 Web UI 域名猜 collector 域名
+- Do not include `/v1/traces` in a base endpoint
+- For a full path, use `--endpoint-kind full`
+- Do not guess the collector domain from the web UI domain
 
 ### Q3. 401 / 403
 
-- header 名或值错误
-- API key 类型不对
-- 检查后端是否需要 `Authorization` 而不是 `x-api-key`
+- Wrong header name or value
+- Wrong API key type
+- Check whether the backend expects `Authorization` instead of `x-api-key`
 
-### Q4. 没有 subagent 子树
+### Q4. No subagent subtree
 
-- 确认 `tool_mode=ordered`
-- 确认 Agent/Task tool result 里有 `toolUseResult.agentId`
-- 确认 `subagents/agent-<id>.jsonl` 存在
-- realtime 模式不展开 subagent
+- Confirm `tool_mode=ordered`
+- Confirm the Agent/Task tool result contains `toolUseResult.agentId`
+- Confirm `subagents/agent-<id>.jsonl` exists
+- Realtime mode does not expand subagents
 
-### Q5. 内容太多 / 敏感信息
+### Q5. Too much content / sensitive data
 
-编辑 `~/.claude/genai-hook.json`：
+Edit `~/.claude/genai-hook.json`:
 
 ```json
 {
@@ -322,13 +328,13 @@ invoke_agent（turn root）
 }
 ```
 
-- `mode=none`：只发结构
-- `mode=last_turn`：只发当前 turn
-- 修改后新 hook 进程会读取配置
+- `mode=none`: send structure only
+- `mode=last_turn`: send the current turn only
+- Each new hook process reads the updated config
 
-### Q6. Python / pip 依赖
+### Q6. Python / pip dependencies
 
-使用稳定 venv：
+Use a stable venv:
 
 ```bash
 CCGH_HOME="$HOME/.local/share/cc-genai-hook"
@@ -339,9 +345,9 @@ python3 -m venv "$CCGH_HOME/venv"
 "$CCGH_HOME/venv/bin/pip" install "$CCGH_HOME/src"
 ```
 
-### Q7. `--mode sidecar` 报错
+### Q7. `--mode sidecar` fails
 
-sidecar 尚未实现（计划 M4）。当前只支持：
+Sidecar mode is not implemented. Only this mode works:
 
 ```bash
 --mode command
@@ -349,9 +355,9 @@ sidecar 尚未实现（计划 M4）。当前只支持：
 
 ---
 
-## Step 7 — 升级 / 卸载
+## Step 7 — Upgrade / uninstall
 
-升级：
+Upgrade:
 
 ```bash
 CCGH_HOME="$HOME/.local/share/cc-genai-hook"
@@ -363,13 +369,13 @@ git -C "$CCGH_HOME/src" pull --ff-only
   --user "$(whoami)"
 ```
 
-卸载 hooks：
+Remove the hooks:
 
 ```bash
 "$CCG" uninstall
 ```
 
-同时删除配置和 state：
+Also delete the config and state:
 
 ```bash
 "$CCG" uninstall --purge
@@ -377,26 +383,26 @@ git -C "$CCGH_HOME/src" pull --ff-only
 
 ---
 
-## Step 8 — 汇报变更
+## Step 8 — Report the changes
 
-向用户汇报：
+Tell the user:
 
-- endpoint 域名
-- tool_mode：`ordered` / `realtime`
-- 写入文件：
+- The endpoint domain
+- tool_mode: `ordered` / `realtime`
+- Files written:
   - `~/.claude/genai-hook.json`
   - `~/.claude/settings.json`
-- 安装的 hooks
-- `doctor` / `doctor --send-test` 结果
-- 提醒用户查看后端 Trace Explorer
+- The hooks installed
+- The `doctor` / `doctor --send-test` results
+- A reminder to check the backend's trace explorer
 
 ---
 
-## 不要做的事
+## Don'ts
 
-- 不要回显 API key 或其他 secret
-- 不要使用 gRPC OTLP
-- 不要写入 Claude Code 原生 telemetry 变量
-- 不要在没有备份的情况下覆盖 `~/.claude/settings.json`
-- 不要把 `--mode sidecar` 当成已实现功能
-- 不要在没有 `toolUseResult.agentId` 时强行构造 subagent 子树
+- Do not echo API keys or other secrets
+- Do not use gRPC OTLP
+- Do not write Claude Code native telemetry variables
+- Do not overwrite `~/.claude/settings.json` without a backup
+- Do not treat `--mode sidecar` as implemented
+- Do not build a subagent subtree when `toolUseResult.agentId` is missing
